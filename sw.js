@@ -1,6 +1,6 @@
 /* Tindahan POS service worker: caches the app shell so everything works offline.
    Bump CACHE whenever you change any file so phones pick up the update. */
-const CACHE = 'tindahan-v7';
+const CACHE = 'tindahan-v8';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
