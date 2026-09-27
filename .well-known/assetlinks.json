@@ -3,7 +3,6 @@
       "target": {
         "namespace": "android_app",
         "package_name": "io.github.cavitecommuter.twa",
-        "sha256_cert_fingerprints": ["D4:2D:12:E7:C6:C2:27:98:27:40:70:B3:A8:38:83:23:8F:4B:C3:6A:65:82:02:D8:B1:47:FC:A7:FB:D3:74:58"]
+        "sha256_cert_fingerprints": ["A9:FF:50:BD:10:54:64:B8:FA:5E:7A:13:E7:5D:80:88:C4:A8:6D:D5:27:9B:3C:FA:E2:89:6D:D4:0B:A2:C9:76"]
       }
     }]
-
