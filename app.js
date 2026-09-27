@@ -636,8 +636,18 @@ function escpos(lines, kick = false) {
 const drawerKick = () => [0x1B, 0x70, D.settings.drawerPin === 1 ? 1 : 0, 0x19, 0xFA]; /* ESC p pin, 50 ms on, 500 ms off */
 const rawbtHref = bytes => {
   let bin = ''; bytes.forEach(b => { bin += String.fromCharCode(b); });
-  return 'intent:base64,' + btoa(bin) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+  return 'intent:base64,' + btoa(bin) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;action=android.intent.action.VIEW;end;';
 };
+/* Some Android/Chrome combos silently swallow the intent: link above (no app switch, no error).
+   If the tab is still visible shortly after we try, assume the hand-off failed and fall back
+   to the OS share sheet so the cashier always gets *something* to tap, instead of a dead button. */
+async function rawbtPrint(bytes, receiptText) {
+  location.href = rawbtHref(bytes);
+  await sleep(600);
+  if (document.visibilityState === 'visible' && navigator.share) {
+    try { await navigator.share({ text: receiptText || 'Receipt' }); } catch { /* user dismissed the sheet */ }
+  }
+}
 
 const BT = { dev: null, chr: null };
 const BT_SERVICES = ['000018f0-0000-1000-8000-00805f9b34fb', '0000ff00-0000-1000-8000-00805f9b34fb', '0000fff0-0000-1000-8000-00805f9b34fb',
@@ -678,10 +688,10 @@ function systemPrint(lines) {
   $('pre', area).textContent = lines.map(l => l.t).join('\n');
   window.print();
 }
-async function sendToPrinter(bytes, msg) {
+async function sendToPrinter(bytes, msg, lines) {
   const mode = D.settings.printMode || 'system';
   try {
-    if (mode === 'rawbt') { location.href = rawbtHref(bytes); return; }
+    if (mode === 'rawbt') { await rawbtPrint(bytes, lines ? lines.map(l => l.t).join('\n') : undefined); return; }
     if (msg) toast(msg);
     await btSend(bytes);
   } catch (e) {
@@ -696,7 +706,8 @@ async function printSale(s, auto) {
   const mode = D.settings.printMode || 'system', lines = rcptLines(s, D.settings.paper === 80 ? 48 : 32);
   if (mode === 'system') { systemPrint(lines); return; }
   const kick = !!(auto && D.settings.drawer && s.method === 'cash');
-  await sendToPrinter(escpos(lines, kick), 'Printing…');
+  if (kick) { await sendToPrinter(Uint8Array.from([0x1B, 0x40, ...drawerKick()]), undefined); await sleep(350); }
+  await sendToPrinter(escpos(lines, false), 'Printing…', lines);
 }
 const drawerReady = () => !!D.settings.drawer && (D.settings.printMode || 'system') !== 'system';
 function openDrawer() {
@@ -705,7 +716,7 @@ function openDrawer() {
 }
 async function printLines(lines) {
   if ((D.settings.printMode || 'system') === 'system') { systemPrint(lines); return; }
-  await sendToPrinter(escpos(lines), 'Printing…');
+  await sendToPrinter(escpos(lines), 'Printing…', lines);
 }
 const sampleSale = () => ({ no: 1, ts: Date.now(), items: [{ qty: 2, name: 'Sample item', price: 10 }, { qty: 1, name: 'Another item with a long name', price: 25 }], subtotal: 45, discount: 0, total: 45, method: 'cash', tendered: 50, change: 5 });
 
@@ -1167,6 +1178,8 @@ function openSettings() {
       <select id="p_paper" class="in" data-in="ppaper"><option value="58"${D.settings.paper !== 80 ? ' selected' : ''}>58 mm (32 characters)</option><option value="80"${D.settings.paper === 80 ? ' selected' : ''}>80 mm (48 characters)</option></select>
       <p class="note">${PR_HINT[m]}</p>
       ${m === 'bt' ? `<div class="qrset"><div class="l"><b>${esc(D.settings.printerName || 'No printer chosen')}</b><small>Bluetooth printer</small></div><button class="btn ghost" data-act="btPick">${D.settings.printerName ? 'Change' : 'Connect'}</button></div>` : ''}
+      ${m === 'rawbt' ? `<div class="btnrow" style="margin-top:8px"><button class="btn ghost" data-act="openBtSettings">Pair a printer</button><button class="btn ghost" data-act="openRawbt">Open RawBT app</button></div>
+        <p class="note">"Pair a printer" opens your phone's Bluetooth settings to scan for and pair BT58D. Once paired, open RawBT and set it as the default printer there.</p>` : ''}
       <label class="check"><input type="checkbox" id="p_auto" data-in="pauto"${D.settings.autoPrint ? ' checked' : ''}> Print receipt automatically when I tap Confirm</label>
       ${m !== 'system' ? `<label class="check"><input type="checkbox" id="p_drawer" data-in="pdrawer"${D.settings.drawer ? ' checked' : ''}> Open cash drawer on cash sales</label>
         ${D.settings.drawer ? `<label class="lbl" for="p_pin">Drawer connector</label>
@@ -1186,6 +1199,14 @@ function openSettings() {
     toast(e && e.code === 'nobt' ? 'Bluetooth is not available here. Try the RawBT option.' : e && e.code === 'nowrite' ? 'Connected, but this printer is not compatible. Try the RawBT option.' : 'Could not connect to the printer.');
   });
   w._acts.testPrint = () => printSale(sampleSale(), false);
+  w._acts.openBtSettings = () => {
+    try { location.href = 'intent:#Intent;action=android.settings.BLUETOOTH_SETTINGS;end;'; }
+    catch { toast('Could not open Bluetooth settings. Open it from your phone directly.'); }
+  };
+  w._acts.openRawbt = () => {
+    try { location.href = 'intent:#Intent;action=android.intent.action.MAIN;package=ru.a402d.rawbtprinter;end;'; }
+    catch { toast('Could not open RawBT. Open it from your app list.'); }
+  };
   w._acts.qrUp = el => pickQr(el.dataset.k, drawQr);
   w._acts.qrDel = el => { D.settings.qr = { ...(D.settings.qr || {}), [el.dataset.k]: '' }; save('settings'); drawQr(); };
   setFooter(w, `<button class="btn primary grow" data-act="saveSet">Save settings</button>`);
