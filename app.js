@@ -603,7 +603,7 @@ function lineBuilder(W) {
 }
 /* Turns a sale into fixed-width lines: [{t: 'text', b: bold?}] */
 function rcptLines(s, W = 32) {
-  const { L, ctr, two, rule } = lineBuilder(W);
+  const { L, add, ctr, two, rule } = lineBuilder(W);
   ctr(D.settings.storeName || 'Store', true);
   if (D.settings.address) ctr(D.settings.address);
   if (D.settings.phone) ctr(D.settings.phone);
