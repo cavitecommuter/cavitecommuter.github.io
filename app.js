@@ -634,6 +634,66 @@ function escpos(lines, kick = false) {
   return Uint8Array.from(out);
 }
 const drawerKick = () => [0x1B, 0x70, D.settings.drawerPin === 1 ? 1 : 0, 0x19, 0xFA]; /* ESC p pin, 50 ms on, 500 ms off */
+/* Converts the saved logo (data URL) into an ESC/POS raster bit image (GS v 0), 1-bit monochrome.
+   Thermal printers can't render <img> tags, so the logo has to be sent as this dot pattern instead. */
+function logoRaster(dataUrl, maxWidthPx) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxWidthPx / img.width);
+        const wBytes = Math.max(1, Math.ceil((img.width * scale) / 8));
+        const wPadded = wBytes * 8;
+        const h = Math.max(1, Math.round(img.height * wPadded / img.width));
+        const canvas = document.createElement('canvas');
+        canvas.width = wPadded; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, wPadded, h);
+        ctx.drawImage(img, 0, 0, wPadded, h);
+        const data = ctx.getImageData(0, 0, wPadded, h).data;
+        const bytes = [];
+        for (let y = 0; y < h; y++) {
+          for (let xByte = 0; xByte < wBytes; xByte++) {
+            let byte = 0;
+            for (let bit = 0; bit < 8; bit++) {
+              const x = xByte * 8 + bit, idx = (y * wPadded + x) * 4;
+              const a = data[idx + 3];
+              const lum = a < 128 ? 255 : (0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+              if (lum < 200) byte |= 1 << (7 - bit);
+            }
+            bytes.push(byte);
+          }
+        }
+        resolve({ wBytes, h, bytes });
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('logo load failed'));
+    img.src = dataUrl;
+  });
+}
+/* Builds the full print job: logo raster (if set) + the fixed-width text lines, for BLE/RawBT printers. */
+async function escposReceipt(lines, kick = false) {
+  const out = [0x1B, 0x40];
+  if (kick) out.push(...drawerKick());
+  if (D.settings.logo) {
+    try {
+      const maxW = D.settings.paper === 80 ? 576 : 384; /* dots at 203dpi for 80mm / 58mm paper */
+      const { wBytes, h, bytes } = await logoRaster(D.settings.logo, maxW);
+      out.push(0x1B, 0x61, 1); /* center */
+      out.push(0x1D, 0x76, 0x30, 0x00, wBytes & 0xFF, (wBytes >> 8) & 0xFF, h & 0xFF, (h >> 8) & 0xFF, ...bytes);
+      out.push(0x0A, 0x1B, 0x61, 0); /* feed + back to left align */
+    } catch { /* logo failed to render; still print the text receipt */ }
+  }
+  let bold = false;
+  lines.forEach(l => {
+    if (l.b !== bold) { out.push(0x1B, 0x45, l.b ? 1 : 0); bold = l.b; }
+    for (const ch of ascii(l.t)) out.push(ch.charCodeAt(0));
+    out.push(0x0A);
+  });
+  if (bold) out.push(0x1B, 0x45, 0);
+  out.push(0x1B, 0x64, 4);
+  return Uint8Array.from(out);
+}
 const rawbtHref = bytes => {
   let bin = ''; bytes.forEach(b => { bin += String.fromCharCode(b); });
   return 'intent:base64,' + btoa(bin) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;action=android.intent.action.VIEW;end;';
@@ -706,8 +766,7 @@ async function printSale(s, auto) {
   const mode = D.settings.printMode || 'system', lines = rcptLines(s, D.settings.paper === 80 ? 48 : 32);
   if (mode === 'system') { systemPrint(lines); return; }
   const kick = !!(auto && D.settings.drawer && s.method === 'cash');
-  if (kick) { await sendToPrinter(Uint8Array.from([0x1B, 0x40, ...drawerKick()]), undefined); await sleep(350); }
-  await sendToPrinter(escpos(lines, false), 'Printing…', lines);
+  await sendToPrinter(await escposReceipt(lines, kick), 'Printing…', lines);
 }
 const drawerReady = () => !!D.settings.drawer && (D.settings.printMode || 'system') !== 'system';
 function openDrawer() {
